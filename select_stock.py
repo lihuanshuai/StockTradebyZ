@@ -6,7 +6,8 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Iterable
+from Selector import Selector
 
 import pandas as pd
 
@@ -25,8 +26,9 @@ logger = logging.getLogger("select")
 
 # ---------- 工具 ----------
 
-def load_data(data_dir: Path, codes: Iterable[str]) -> Dict[str, pd.DataFrame]:
-    frames: Dict[str, pd.DataFrame] = {}
+
+def load_data(data_dir: Path, codes: Iterable[str]) -> dict[str, pd.DataFrame]:
+    frames: dict[str, pd.DataFrame] = {}
     for code in codes:
         fp = data_dir / f"{code}.csv"
         if not fp.exists():
@@ -37,7 +39,7 @@ def load_data(data_dir: Path, codes: Iterable[str]) -> Dict[str, pd.DataFrame]:
     return frames
 
 
-def load_config(cfg_path: Path) -> List[Dict[str, Any]]:
+def load_config(cfg_path: Path) -> list[dict[str, Any]]:
     if not cfg_path.exists():
         logger.error("配置文件 %s 不存在", cfg_path)
         sys.exit(1)
@@ -59,9 +61,9 @@ def load_config(cfg_path: Path) -> List[Dict[str, Any]]:
     return cfgs
 
 
-def instantiate_selector(cfg: Dict[str, Any]):
+def instantiate_selector(cfg: dict[str, Any]) -> tuple[str, Selector]:
     """动态加载 Selector 类并实例化"""
-    cls_name: str = cfg.get("class")
+    cls_name: str = cfg.get("class", "")
     if not cls_name:
         raise ValueError("缺少 class 字段")
 
@@ -77,7 +79,8 @@ def instantiate_selector(cfg: Dict[str, Any]):
 
 # ---------- 主函数 ----------
 
-def main():
+
+def main() -> None:
     p = argparse.ArgumentParser(description="Run selectors defined in configs.json")
     p.add_argument("--data-dir", default="./data", help="CSV 行情目录")
     p.add_argument("--config", default="./configs.json", help="Selector 配置文件")
@@ -106,9 +109,7 @@ def main():
         sys.exit(1)
 
     trade_date = (
-        pd.to_datetime(args.date)
-        if args.date
-        else max(df["date"].max() for df in data.values())
+        pd.to_datetime(args.date) if args.date else max(df["date"].max() for df in data.values())
     )
     if not args.date:
         logger.info("未指定 --date，使用最近日期 %s", trade_date.date())
