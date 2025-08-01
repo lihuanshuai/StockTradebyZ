@@ -9,11 +9,9 @@ import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Optional
-import os
 
 import pandas as pd
-import tushare as ts
+from mootdx.quotes import Quotes
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
@@ -28,24 +26,32 @@ logging.basicConfig(
         logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8"),
     ],
 )
-logger = logging.getLogger("fetch_from_stocklist")
+logger = logging.getLogger(__name__)
+
+# 屏蔽第三方库多余 INFO 日志
+for noisy in ("httpx", "urllib3", "_client", "akshare"):
+    logging.getLogger(noisy).setLevel(logging.WARNING)
+
 
 # --------------------------- 限流/封禁处理配置 --------------------------- #
 COOLDOWN_SECS = 600
 BAN_PATTERNS = (
-    "访问频繁", "请稍后", "超过频率", "频繁访问",
-    "too many requests", "429",
-    "forbidden", "403",
-    "max retries exceeded"
+    "访问频繁",
+    "请稍后",
+    "超过频率",
+    "频繁访问",
+    "too many requests",
+    "429",
+    "forbidden",
+    "403",
+    "max retries exceeded",
 )
+
 
 def _looks_like_ip_ban(exc: Exception) -> bool:
     msg = (str(exc) or "").lower()
     return any(pat in msg for pat in BAN_PATTERNS)
 
-class RateLimitError(RuntimeError):
-    """表示命中限流/封禁，需要长时间冷却后重试。"""
-    pass
 
 def _cool_sleep(base_seconds: int) -> None:
     jitter = random.uniform(0.9, 1.2)
@@ -53,51 +59,42 @@ def _cool_sleep(base_seconds: int) -> None:
     logger.warning("疑似被限流/封禁，进入冷却期 %d 秒...", sleep_s)
     time.sleep(sleep_s)
 
-# --------------------------- 历史K线（Tushare 日线，固定qfq） --------------------------- #
-pro: Optional[ts.pro_api] = None  # 模块级会话
 
-def set_api(session) -> None:
-    """由外部(比如GUI)注入已创建好的 ts.pro_api() 会话"""
-    global pro
-    pro = session
-    
+# ---------- Mootdx 工具函数 ---------- #
 
-def _to_ts_code(code: str) -> str:
-    """把6位code映射到标准 ts_code 后缀。"""
-    code = str(code).zfill(6)
-    if code.startswith(("60", "68", "9")):
-        return f"{code}.SH"
-    elif code.startswith(("4", "8")):
-        return f"{code}.BJ"
-    else:
-        return f"{code}.SZ"
 
-def _get_kline_tushare(code: str, start: str, end: str) -> pd.DataFrame:
-    ts_code = _to_ts_code(code)
+def _get_kline_mootdx(code: str, start: str, end: str) -> pd.DataFrame:
+    symbol = code.zfill(6)
+    freq = "day"
+    client = Quotes.factory(market="std")
     try:
-        df = ts.pro_bar(
-            ts_code=ts_code,
-            adj="qfq",
-            start_date=start,
-            end_date=end,
-            freq="D",
-            api=pro
-        )
+        df = client.bars(symbol=symbol, frequency=freq, adjust="qfq")
     except Exception as e:
-        if _looks_like_ip_ban(e):
-            raise RateLimitError(str(e)) from e
-        raise
-
+        logger.warning("Mootdx 拉取 %s 失败: %s", code, e)
+        return pd.DataFrame()
     if df is None or df.empty:
         return pd.DataFrame()
 
-    df = df.rename(columns={"trade_date": "date", "vol": "volume"})[
-        ["date", "open", "close", "high", "low", "volume"]
-    ].copy()
-    df["date"] = pd.to_datetime(df["date"])
-    for c in ["open", "close", "high", "low", "volume"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df.sort_values("date").reset_index(drop=True)
+    df = df.rename(
+        columns={
+            "datetime": "date",
+            "open": "open",
+            "high": "high",
+            "low": "low",
+            "close": "close",
+            "vol": "volume",
+        }
+    )
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+    start_ts = pd.to_datetime(start, format="%Y%m%d")
+    end_ts = pd.to_datetime(end, format="%Y%m%d")
+    df = df[(df["date"].dt.date >= start_ts.date()) & (df["date"].dt.date <= end_ts.date())].copy()
+    df = df.sort_values("date").reset_index(drop=True)
+    return df[["date", "open", "close", "high", "low", "volume"]]
+
+
+# ---------- 数据校验 ---------- #
+
 
 def validate(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
@@ -109,7 +106,9 @@ def validate(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("数据包含未来日期，可能抓取错误！")
     return df
 
+
 # --------------------------- 读取 stocklist.csv & 过滤板块 --------------------------- #
+
 
 def _filter_by_boards_stocklist(df: pd.DataFrame, exclude_boards: set[str]) -> pd.DataFrame:
     """
@@ -131,14 +130,20 @@ def _filter_by_boards_stocklist(df: pd.DataFrame, exclude_boards: set[str]) -> p
 
     return df[mask].copy()
 
-def load_codes_from_stocklist(stocklist_csv: Path, exclude_boards: set[str]) -> List[str]:
-    df = pd.read_csv(stocklist_csv)    
+
+def load_codes_from_stocklist(stocklist_csv: Path, exclude_boards: set[str]) -> list[str]:
+    df = pd.read_csv(stocklist_csv)
     df = _filter_by_boards_stocklist(df, exclude_boards)
     codes = df["symbol"].astype(str).str.zfill(6).tolist()
     codes = list(dict.fromkeys(codes))  # 去重保持顺序
-    logger.info("从 %s 读取到 %d 只股票（排除板块：%s）",
-                stocklist_csv, len(codes), ",".join(sorted(exclude_boards)) or "无")
+    logger.info(
+        "从 %s 读取到 %d 只股票（排除板块：%s）",
+        stocklist_csv,
+        len(codes),
+        ",".join(sorted(exclude_boards)) or "无",
+    )
     return codes
+
 
 # --------------------------- 单只抓取（全量覆盖保存） --------------------------- #
 def fetch_one(
@@ -146,12 +151,12 @@ def fetch_one(
     start: str,
     end: str,
     out_dir: Path,
-):
+) -> None:
     csv_path = out_dir / f"{code}.csv"
 
     for attempt in range(1, 4):
         try:
-            new_df = _get_kline_tushare(code, start, end)
+            new_df = _get_kline_mootdx(code, start, end)
             if new_df.empty:
                 logger.debug("%s 无数据，生成空表。", code)
                 new_df = pd.DataFrame(columns=["date", "open", "close", "high", "low", "volume"])
@@ -169,35 +174,32 @@ def fetch_one(
     else:
         logger.error("%s 三次抓取均失败，已跳过！", code)
 
-# --------------------------- 主入口 --------------------------- #
-def main():
-    parser = argparse.ArgumentParser(description="从 stocklist.csv 读取股票池并用 Tushare 抓取日线K线（固定qfq，全量覆盖）")
-    # 抓取范围
+
+# ---------- 主入口 ---------- #
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="按市值筛选 A 股并抓取历史 K 线")
     parser.add_argument("--start", default="20190101", help="起始日期 YYYYMMDD 或 'today'")
     parser.add_argument("--end", default="today", help="结束日期 YYYYMMDD 或 'today'")
     # 股票清单与板块过滤
-    parser.add_argument("--stocklist", type=Path, default=Path("./stocklist.csv"), help="股票清单CSV路径（需含 ts_code 或 symbol）")
+    parser.add_argument(
+        "--stocklist",
+        type=Path,
+        default=Path("./stocklist.csv"),
+        help="股票清单CSV路径（需含 ts_code 或 symbol）",
+    )
     parser.add_argument(
         "--exclude-boards",
         nargs="*",
-        default=[],
+        default=["gem", "star", "bj"],
         choices=["gem", "star", "bj"],
-        help="排除板块，可多选：gem(创业板300/301) star(科创板688) bj(北交所.BJ/4/8)"
+        help="排除板块，可多选：gem(创业板300/301) star(科创板688) bj(北交所.BJ/4/8)",
     )
     # 其它
     parser.add_argument("--out", default="./data", help="输出目录")
     parser.add_argument("--workers", type=int, default=6, help="并发线程数")
     args = parser.parse_args()
-
-    # ---------- Tushare Token ---------- #
-    os.environ["NO_PROXY"] = "api.waditu.com,.waditu.com,waditu.com"
-    os.environ["no_proxy"] = os.environ["NO_PROXY"]
-    ts_token = os.environ.get("TUSHARE_TOKEN")
-    if not ts_token:
-        raise ValueError("请先设置环境变量 TUSHARE_TOKEN，例如：export TUSHARE_TOKEN=你的token")
-    ts.set_token(ts_token)
-    global pro
-    pro = ts.pro_api()
 
     # ---------- 日期解析 ---------- #
     start = dt.date.today().strftime("%Y%m%d") if str(args.start).lower() == "today" else args.start
@@ -215,8 +217,11 @@ def main():
         sys.exit(1)
 
     logger.info(
-        "开始抓取 %d 支股票 | 数据源:Tushare(日线,qfq) | 日期:%s → %s | 排除:%s",
-        len(codes), start, end, ",".join(sorted(exclude_boards)) or "无",
+        "开始抓取 %d 支股票 | 数据源:Mootdx(日线,qfq) | 日期:%s → %s | 排除:%s",
+        len(codes),
+        start,
+        end,
+        ",".join(sorted(exclude_boards)) or "无",
     )
 
     # ---------- 多线程抓取（全量覆盖） ---------- #
@@ -235,6 +240,7 @@ def main():
             pass
 
     logger.info("全部任务完成，数据已保存至 %s", out_dir.resolve())
+
 
 if __name__ == "__main__":
     main()
