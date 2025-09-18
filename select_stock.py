@@ -108,9 +108,7 @@ def main() -> None:
         logger.error("未能加载任何行情数据")
         sys.exit(1)
 
-    trade_date = (
-        pd.to_datetime(args.date) if args.date else max(df["date"].max() for df in data.values())
-    )
+    trade_date = pd.to_datetime(args.date)
     if not args.date:
         logger.info("未指定 --date，使用最近日期 %s", trade_date.date())
 
