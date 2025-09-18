@@ -198,7 +198,7 @@ def main() -> None:
     )
     # 其它
     parser.add_argument("--out", default="./data", help="输出目录")
-    parser.add_argument("--workers", type=int, default=6, help="并发线程数")
+    parser.add_argument("--workers", type=int, default=8, help="并发线程数")
     args = parser.parse_args()
 
     # ---------- 日期解析 ---------- #
