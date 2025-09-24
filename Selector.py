@@ -1,4 +1,5 @@
-from abc import ABC, abstractmethod
+from abc import abstractmethod
+from typing import Protocol
 from typing import Any
 
 from scipy.signal import find_peaks
@@ -247,7 +248,7 @@ def zx_condition_at_positions(
     return True
 
 
-class Selector(ABC):
+class Selector(Protocol):
     @abstractmethod
     def select(self, date: pd.Timestamp, data: dict[str, pd.DataFrame]) -> list[str]: ...
 
