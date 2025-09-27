@@ -141,6 +141,7 @@ def main() -> None:
         logger.info("%s", ", ".join(picks) if picks else "无符合条件股票")
         for pick in picks:
             target_df = stocklist_df[stocklist_df["symbol"] == int(pick)]
+            target_df["symbol"] = target_df["symbol"].astype(str).zfill(6)
             logger.info("%s", target_df.to_string(index=False, header=False))
 
 
