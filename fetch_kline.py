@@ -4,6 +4,7 @@ import argparse
 import datetime as dt
 import logging
 import random
+from typing import Literal, NamedTuple
 import sys
 import time
 import warnings
@@ -11,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pandas as pd
+import akshare as ak
 from mootdx.quotes import Quotes
 from tqdm import tqdm
 
@@ -32,6 +34,40 @@ logger = logging.getLogger(__name__)
 for noisy in ("httpx", "urllib3", "_client", "akshare"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
+COLUMN_MAP_HIST_AK = {
+    "日期": "date",
+    "开盘": "open",
+    "收盘": "close",
+    "最高": "high",
+    "最低": "low",
+    "成交量": "volume",
+    "成交额": "amount",
+    "换手率": "turnover",
+}
+
+STOCK_CODE_PREFIX = NamedTuple(
+    "STOCK_CODE_PREFIX",
+    [
+        ("GEM", tuple[str, ...]),
+        ("STAR", tuple[str, ...]),
+        ("BJ", tuple[str, ...]),
+    ],
+)(  # type: ignore[operator]
+    GEM=("300", "301"),
+    STAR=("688",),
+    BJ=("4", "8"),
+)
+
+FUND_CODE_PREFIX = NamedTuple(
+    "FUND_CODE_PREFIX",
+    [
+        ("SH", tuple[str, ...]),
+        ("SZ", tuple[str, ...]),
+    ],
+)(  # type: ignore[operator]
+    SH=("50", "51", "52", "588"),
+    SZ=("00", "15", "16"),
+)
 
 # --------------------------- 限流/封禁处理配置 --------------------------- #
 COOLDOWN_SECS = 600
@@ -58,6 +94,51 @@ def _cool_sleep(base_seconds: int) -> None:
     sleep_s = max(1, int(base_seconds * jitter))
     logger.warning("疑似被限流/封禁，进入冷却期 %d 秒...", sleep_s)
     time.sleep(sleep_s)
+
+
+# ---------- AKShare 工具函数 ---------- #
+
+
+def _get_kline_akshare(code: str, start: str, end: str) -> pd.DataFrame:
+    fund_prefixes = FUND_CODE_PREFIX.SH + FUND_CODE_PREFIX.SZ
+    for attempt in range(1, 4):
+        try:
+            if code.startswith(fund_prefixes):
+                df = ak.fund_etf_hist_em(
+                    symbol=code,
+                    period="daily",
+                    start_date=start,
+                    end_date=end,
+                    adjust="qfq",
+                )
+            else:
+                df = ak.stock_zh_a_hist(
+                    symbol=code,
+                    period="daily",
+                    start_date=start,
+                    end_date=end,
+                    adjust="qfq",
+                )
+            break
+        except Exception as e:
+            logger.warning("AKShare 拉取 %s 失败(%d/3): %s", code, attempt, e)
+            time.sleep(random.uniform(1, 2) * attempt)
+    else:
+        return pd.DataFrame()
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    df = (
+        df[list(COLUMN_MAP_HIST_AK)]
+        .rename(columns=COLUMN_MAP_HIST_AK)
+        .assign(date=lambda x: pd.to_datetime(x["date"]))
+    )
+    df[[c for c in df.columns if c != "date"]] = df[[c for c in df.columns if c != "date"]].apply(
+        pd.to_numeric, errors="coerce"
+    )
+    df = df[["date", "open", "close", "high", "low", "volume"]]
+    return df.sort_values("date").reset_index(drop=True)
 
 
 # ---------- Mootdx 工具函数 ---------- #
@@ -122,11 +203,11 @@ def _filter_by_boards_stocklist(df: pd.DataFrame, exclude_boards: set[str]) -> p
     mask = pd.Series(True, index=df.index)
 
     if "gem" in exclude_boards:
-        mask &= ~code.str.startswith(("300", "301"))
+        mask &= ~code.str.startswith(STOCK_CODE_PREFIX.GEM)
     if "star" in exclude_boards:
-        mask &= ~code.str.startswith(("688",))
+        mask &= ~code.str.startswith(STOCK_CODE_PREFIX.STAR)
     if "bj" in exclude_boards:
-        mask &= ~(ts_code.str.endswith(".BJ") | code.str.startswith(("4", "8")))
+        mask &= ~(ts_code.str.endswith(".BJ") | code.str.startswith(STOCK_CODE_PREFIX.BJ))
 
     return df[mask].copy()
 
@@ -146,17 +227,27 @@ def load_codes_from_stocklist(stocklist_csv: Path, exclude_boards: set[str]) -> 
 
 
 # --------------------------- 单只抓取（全量覆盖保存） --------------------------- #
+
+
 def fetch_one(
     code: str,
     start: str,
     end: str,
     out_dir: Path,
+    *,
+    data_source: Literal["akshare", "mootdx"] = "akshare",
 ) -> None:
     csv_path = out_dir / f"{code}.csv"
 
     for attempt in range(1, 4):
         try:
-            new_df = _get_kline_mootdx(code, start, end)
+            match data_source:
+                case "akshare":
+                    new_df = _get_kline_akshare(code, start, end)
+                case "mootdx":
+                    new_df = _get_kline_mootdx(code, start, end)
+                case _:
+                    raise ValueError(f"不支持的数据源: {data_source}")
             if new_df.empty:
                 logger.debug("%s 无数据，生成空表。", code)
                 new_df = pd.DataFrame(columns=["date", "open", "close", "high", "low", "volume"])
@@ -199,6 +290,9 @@ def main() -> None:
     # 其它
     parser.add_argument("--out", default="./data", help="输出目录")
     parser.add_argument("--workers", type=int, default=8, help="并发线程数")
+    parser.add_argument(
+        "--data-source", type=str, default="akshare", help="数据源：akshare(akshare) mootdx(mootdx)"
+    )
     args = parser.parse_args()
 
     # ---------- 日期解析 ---------- #
@@ -217,8 +311,9 @@ def main() -> None:
         sys.exit(1)
 
     logger.info(
-        "开始抓取 %d 支股票 | 数据源:Mootdx(日线,qfq) | 日期:%s → %s | 排除:%s",
+        "开始抓取 %d 支股票 | 数据源:%s(日线,qfq) | 日期:%s → %s | 排除:%s",
         len(codes),
+        args.data_source,
         start,
         end,
         ",".join(sorted(exclude_boards)) or "无",
@@ -233,6 +328,7 @@ def main() -> None:
                 start,
                 end,
                 out_dir,
+                data_source=args.data_source,
             )
             for code in codes
         ]
