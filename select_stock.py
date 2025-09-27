@@ -77,13 +77,24 @@ def instantiate_selector(cfg: dict[str, Any]) -> tuple[str, Selector]:
     return cfg.get("alias", cls_name), cls(**params)
 
 
+def load_stocklist(stocklist_paths: list[Path]) -> pd.DataFrame:
+    df = pd.concat([pd.read_csv(path) for path in stocklist_paths])
+    df["symbol"] = df["symbol"].astype(str).str.zfill(6)
+    df = df.drop_duplicates(subset=["symbol"])
+    return df
+
+
 # ---------- 主函数 ----------
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Run selectors defined in configs.json")
     p.add_argument("--data-dir", default="./data", help="CSV 行情目录")
-    p.add_argument("--stocklist", default="./stocklist.csv", help="股票池文件")
+    p.add_argument(
+        "--stocklist",
+        default="./stocklist.csv,./my_stocklist.csv",
+        help="股票池文件,可以指定多个文件，用逗号分隔",
+    )
     p.add_argument("--config", default="./configs.json", help="Selector 配置文件")
     p.add_argument("--date", help="交易日 YYYY-MM-DD；缺省=数据最新日期")
     p.add_argument("--tickers", default="all", help="'all' 或逗号分隔股票代码列表")
@@ -121,7 +132,8 @@ def main() -> None:
     selector_cfgs = load_config(Path(args.config))
 
     # --- 逐个 Selector 运行 ---
-    stocklist_df = pd.read_csv(args.stocklist)
+    stocklist_paths = [Path(path) for path in args.stocklist.split(",")]
+    stocklist_df = load_stocklist(stocklist_paths)
     for cfg in selector_cfgs:
         if cfg.get("activate", True) is False:
             continue
@@ -140,8 +152,7 @@ def main() -> None:
         logger.info("符合条件股票数: %d", len(picks))
         logger.info("%s", ", ".join(picks) if picks else "无符合条件股票")
         for pick in picks:
-            target_df = stocklist_df[stocklist_df["symbol"] == int(pick)]
-            target_df["symbol"] = target_df["symbol"].astype(str).zfill(6)
+            target_df = stocklist_df[stocklist_df["symbol"] == pick]
             logger.info("%s", target_df.to_string(index=False, header=False))
 
 
