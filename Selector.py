@@ -37,6 +37,16 @@ def compute_bbi(df: pd.DataFrame) -> pd.Series:
     return (ma3 + ma6 + ma12 + ma24) / 4
 
 
+def compute_mfi(df: pd.DataFrame, n: int = 14) -> pd.Series:
+    typical_price = (df["high"] + df["low"] + df["close"]) / 3
+    mf = typical_price * df["volume"]
+    positive_mf = mf.where(typical_price > typical_price.shift(1), 0).rolling(window=n).sum()
+    negative_mf = mf.where(typical_price < typical_price.shift(1), 0).rolling(window=n).sum()
+    mr = (positive_mf / negative_mf).replace([np.inf, -np.inf], 0)
+    mfi = 100 - (100 / (1 + mr))
+    return mfi
+
+
 def compute_rsv(
     df: pd.DataFrame,
     n: int,
@@ -712,7 +722,7 @@ class BBIShortLongSelector(Selector):
         return picks
 
 
-class MA60CrossVolumeWaveSelector:
+class MA60CrossVolumeWaveSelector(Selector):
     """
     放量突破 + KDJ + DIF>0 + 收盘价波动幅度 选股器
     条件：
@@ -847,6 +857,49 @@ class MA60CrossVolumeWaveSelector:
         for code, df in data.items():
             hist = df[df["date"] <= date].tail(need_len)
             if len(hist) < need_len:
+                continue
+            if self._passes_filters(hist):
+                picks.append(code)
+        return picks
+
+
+class MFIOverSoldSelector(Selector):
+    def __init__(
+        self,
+        lookback_n: int = 14,
+        min_threshold: float = 1,
+        max_threshold: float = 20,
+        max_window: int = 250,
+    ) -> None:
+        self.lookback_n = lookback_n
+        self.min_threshold = min_threshold
+        self.max_threshold = max_threshold
+        self.max_window = max_window
+
+    def _passes_filters(self, hist: pd.DataFrame) -> bool:
+        if hist.empty:
+            return False
+        hist = hist.copy().sort_values("date")
+        if not passes_day_constraints_today(hist):
+            return False
+        mfi = compute_mfi(hist, n=self.lookback_n)
+        latest_mfi = mfi.iloc[-1]
+        if latest_mfi < self.min_threshold:
+            return False
+        if latest_mfi > self.max_threshold:
+            return False
+        # print("latest_mfi:", latest_mfi)
+        if not zx_condition_at_positions(
+            hist, require_close_gt_long=True, require_short_gt_long=True, pos=None
+        ):
+            return False
+        return True
+
+    def select(self, date: pd.Timestamp, data: dict[str, pd.DataFrame]) -> list[str]:
+        picks: list[str] = []
+        for code, df in data.items():
+            hist = df[df["date"] <= date].tail(self.max_window)
+            if len(hist) < self.max_window:
                 continue
             if self._passes_filters(hist):
                 picks.append(code)
