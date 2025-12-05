@@ -5,11 +5,13 @@ import importlib
 import json
 import logging
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
-from Selector import Selector
+from typing import Any
 
 import pandas as pd
+
+from Selector import Selector
 
 # ---------- 日志 ----------
 logging.basicConfig(
