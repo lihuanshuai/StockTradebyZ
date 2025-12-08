@@ -115,7 +115,7 @@ def compute_j_industry_distribution(
         }
 
     # 2) 读历史数据
-    frames = load_data(Path(data_dir), codes)
+    frames = load_data(codes)
 
     # 3) 计算 指定日（或之前最近一日） 的 J 值
     j_map: dict[str, float] = {}

@@ -1,10 +1,10 @@
 from abc import abstractmethod
-from typing import Protocol
-from typing import Any
+from typing import Any, Protocol
 
-from scipy.signal import find_peaks
 import numpy as np
 import pandas as pd
+import pandas_ta as ta
+from scipy.signal import find_peaks
 
 # --------------------------- 通用指标 --------------------------- #
 
@@ -12,39 +12,20 @@ import pandas as pd
 def compute_kdj(df: pd.DataFrame, n: int = 9) -> pd.DataFrame:
     if df.empty:
         return df.assign(K=np.nan, D=np.nan, J=np.nan)
-
-    low_n = df["low"].rolling(window=n, min_periods=1).min()
-    high_n = df["high"].rolling(window=n, min_periods=1).max()
-    rsv = (df["close"] - low_n) / (high_n - low_n + 1e-9) * 100
-
-    K = np.zeros_like(rsv, dtype=float)
-    D = np.zeros_like(rsv, dtype=float)
-    for i in range(len(df)):
-        if i == 0:
-            K[i] = D[i] = 50.0
-        else:
-            K[i] = 2 / 3 * K[i - 1] + 1 / 3 * rsv.iloc[i]
-            D[i] = 2 / 3 * D[i - 1] + 1 / 3 * K[i]
-    J = 3 * K - 2 * D
-    return df.assign(K=K, D=D, J=J)
+    kdj = ta.kdj(df["high"], df["low"], df["close"], n=n)
+    return df.assign(K=kdj[f"K_{n}_3"], D=kdj[f"D_{n}_3"], J=kdj[f"J_{n}_3"])
 
 
 def compute_bbi(df: pd.DataFrame) -> pd.Series:
-    ma3 = df["close"].rolling(3).mean()
-    ma6 = df["close"].rolling(6).mean()
-    ma12 = df["close"].rolling(12).mean()
-    ma24 = df["close"].rolling(24).mean()
+    ma3 = ta.sma(df["close"], length=3)
+    ma6 = ta.sma(df["close"], length=6)
+    ma12 = ta.sma(df["close"], length=12)
+    ma24 = ta.sma(df["close"], length=24)
     return (ma3 + ma6 + ma12 + ma24) / 4
 
 
 def compute_mfi(df: pd.DataFrame, n: int = 14) -> pd.Series:
-    typical_price = (df["high"] + df["low"] + df["close"]) / 3
-    mf = typical_price * df["volume"]
-    positive_mf = mf.where(typical_price > typical_price.shift(1), 0).rolling(window=n).sum()
-    negative_mf = mf.where(typical_price < typical_price.shift(1), 0).rolling(window=n).sum()
-    mr = (positive_mf / negative_mf).replace([np.inf, -np.inf], 0)
-    mfi = 100 - (100 / (1 + mr))
-    return mfi
+    return ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=n)
 
 
 def compute_rsv(
