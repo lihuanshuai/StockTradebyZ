@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -62,11 +63,11 @@ def _filter_by_boards_stocklist(df: pd.DataFrame, exclude_boards: set[str]) -> p
 
 def load_codes_from_stocklist(stocklist_csv: Path, exclude_boards: set[str]) -> list[str]:
     """
-    从 stocklist.csv 读取股票池
+    从 stocklist_csv 读取股票池
     """
-    df = pd.read_csv(stocklist_csv)
+    df = pd.read_csv(stocklist_csv, comment="#")
     df = _filter_by_boards_stocklist(df, exclude_boards)
-    codes = df["symbol"].astype(str).str.zfill(6).tolist()
+    codes = df["ts_code"].tolist()
     codes = list(dict.fromkeys(codes))  # 去重保持顺序
     logger.info(
         "从 %s 读取到 %d 只股票（排除板块：%s）",
@@ -82,6 +83,7 @@ def load_codes_from_stocklist(stocklist_csv: Path, exclude_boards: set[str]) -> 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="按市值筛选 A 股并抓取历史 K 线")
+    parser.add_argument("--start", default="", help="起始日期 YYYYMMDD 或 ''")
     # 股票清单与板块过滤
     parser.add_argument(
         "--stocklist",
@@ -114,12 +116,25 @@ def main() -> None:
     )
 
     # ---------- 抓取数据 ---------- #
-    def callback(data: dict[str, Any]) -> None:
-        print(data)
+    def callback(data: dict[str, Any], prefix: str = "") -> None:
+        print(f"{prefix}: {data}")
 
-    xtdata.download_history_data2(codes, "1d", callback=callback)
-    xtdata.download_financial_data(codes)
-    xtdata.download_sector_data()
+    # 下载日线数据
+    logger.info("开始下载日线数据")
+    xtdata.download_history_data2(
+        codes, "1d", start_time=args.start, callback=partial(callback, prefix="日线")
+    )
+    # 下载财务数据
+    logger.info("开始下载财务数据")
+    xtdata.download_financial_data2(
+        codes,
+        table_list=["PershareIndex"],
+        start_time=args.start,
+        callback=partial(callback, prefix="财务"),
+    )
+    # # 下载行业数据
+    # logger.info("开始下载行业数据")
+    # xtdata.download_sector_data()
 
     logger.info("全部任务完成，数据已保存")
 
