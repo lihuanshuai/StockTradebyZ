@@ -39,7 +39,7 @@ STOCK_CODE_PREFIX = NamedTuple(
 # --------------------------- 读取 stocklist.csv & 过滤板块 --------------------------- #
 
 
-def _filter_by_boards_stocklist(df: pd.DataFrame, exclude_boards: set[str]) -> pd.DataFrame:
+def filter_by_boards_stocklist(df: pd.DataFrame, exclude_boards: set[str]) -> pd.DataFrame:
     """
     过滤板块
     exclude_boards 子集：{'gem','star','bj'}
@@ -61,21 +61,11 @@ def _filter_by_boards_stocklist(df: pd.DataFrame, exclude_boards: set[str]) -> p
     return df[mask].copy()
 
 
-def load_codes_from_stocklist(stocklist_csv: Path, exclude_boards: set[str]) -> list[str]:
-    """
-    从 stocklist_csv 读取股票池
-    """
-    df = pd.read_csv(stocklist_csv, comment="#")
-    df = _filter_by_boards_stocklist(df, exclude_boards)
-    codes = df["ts_code"].tolist()
-    codes = list(dict.fromkeys(codes))  # 去重保持顺序
-    logger.info(
-        "从 %s 读取到 %d 只股票（排除板块：%s）",
-        stocklist_csv,
-        len(codes),
-        ",".join(sorted(exclude_boards)) or "无",
-    )
-    return codes
+def load_stocklist(stocklist_paths: list[Path]) -> pd.DataFrame:
+    df = pd.concat([pd.read_csv(path) for path in stocklist_paths])
+    df["symbol"] = df["symbol"].astype(str).str.zfill(6)
+    df = df.drop_duplicates(subset=["ts_code"])
+    return df
 
 
 # ---------- 主入口 ---------- #
@@ -87,9 +77,8 @@ def main() -> None:
     # 股票清单与板块过滤
     parser.add_argument(
         "--stocklist",
-        type=Path,
-        default=Path("./stocklist.csv"),
-        help="股票清单CSV路径（需含 ts_code 或 symbol）",
+        default="./stocklist.csv,./position.csv",
+        help="股票池文件,可以指定多个文件，用逗号分隔",
     )
     parser.add_argument(
         "--exclude-boards",
@@ -103,7 +92,16 @@ def main() -> None:
 
     # ---------- 从 stocklist.csv 读取股票池 ---------- #
     exclude_boards = set(args.exclude_boards or [])
-    codes = load_codes_from_stocklist(args.stocklist, exclude_boards)
+    stocklist_paths = [Path(path) for path in args.stocklist.split(",")]
+    stocklist_df = load_stocklist(stocklist_paths)
+    stocklist_df = filter_by_boards_stocklist(stocklist_df, exclude_boards)
+    codes = stocklist_df["ts_code"].tolist()
+    logger.info(
+        "从 %s 读取到 %d 只股票（排除板块：%s）",
+        ",".join([path.name for path in stocklist_paths]),
+        len(codes),
+        ",".join(sorted(exclude_boards)) or "无",
+    )
 
     if not codes:
         logger.error("stocklist 为空或被过滤后无代码，请检查。")
