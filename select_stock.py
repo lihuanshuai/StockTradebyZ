@@ -5,7 +5,6 @@ import importlib
 import json
 import logging
 import sys
-from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -32,7 +31,7 @@ logger = logging.getLogger("select")
 # ---------- 工具 ----------
 
 
-def load_data(codes: Iterable[str]) -> dict[str, pd.DataFrame]:
+def load_data(codes: list[str]) -> dict[str, pd.DataFrame]:
     fields = ["open", "high", "low", "close", "volume"]
     data: dict[str, pd.DataFrame] = xtdata.get_market_data(
         field_list=fields,
