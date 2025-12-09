@@ -1,5 +1,5 @@
 IPython~=9.8.0
 pandas~=2.3.0
-pandas-ta~=0.4.71b0
+pandas-ta-classic~=0.3.59
 scipy~=1.14.1
 xtquant~=250516.1.1
