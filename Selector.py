@@ -25,7 +25,15 @@ def compute_bbi(df: pd.DataFrame) -> pd.Series:
 
 
 def compute_mfi(df: pd.DataFrame, n: int = 14) -> pd.Series:
-    return ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=n)
+    # FIXME: 使用自定义实现，因为 ta.mfi 的实现有误
+    # return ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=n)
+    tp = ta.hlc3(df["high"], df["low"], df["close"])
+    mf = tp * df["volume"]
+    pos_mf = mf.where(tp.diff(1) > 0, 0).rolling(window=n, min_periods=1).sum()
+    neg_mf = mf.where(tp.diff(1) < 0, 0).rolling(window=n, min_periods=1).sum()
+    mr = pos_mf / neg_mf.replace(0, np.inf)
+    mfi = 100 - (100 / (1.0 + mr))
+    return mfi
 
 
 def compute_rsv(
