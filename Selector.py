@@ -31,7 +31,7 @@ def compute_mfi(df: pd.DataFrame, n: int = 14) -> pd.Series:
     mf = tp * df["volume"]
     pos_mf = mf.where(tp.diff(1) > 0, 0).rolling(window=n, min_periods=1).sum()
     neg_mf = mf.where(tp.diff(1) < 0, 0).rolling(window=n, min_periods=1).sum()
-    mr = pos_mf / neg_mf.replace(0, np.inf)
+    mr = pos_mf / neg_mf + 1e-9
     mfi = 100 - (100 / (1.0 + mr))
     return mfi
 
