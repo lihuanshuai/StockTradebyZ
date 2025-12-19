@@ -3,36 +3,59 @@ from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
-import pandas_ta_classic as ta
+import talib as ta
 from scipy.signal import find_peaks
 
 # --------------------------- 通用指标 --------------------------- #
 
 
+def KDJ(
+    H: pd.Series, L: pd.Series, C: pd.Series, n: int = 9
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """计算 KDJ 指标
+
+    TODO: 使用 talib 计算 KDJ 指标
+    """
+    L5 = L.rolling(window=n, min_periods=1).min()
+    H5 = H.rolling(window=n, min_periods=1).max()
+    RSV = 100 * ((C - L5) / (H5 - L5)).values
+    k0 = 50.0
+    k_out = []
+    for j in range(len(RSV)):
+        if RSV[j] == RSV[j]:  # check for nan
+            k0 = 1 / 3 * RSV[j] + 2 / 3 * k0
+            k_out.append(k0)
+        else:
+            k_out.append(float("nan"))
+    d0 = 50.0
+    d_out = []
+    for j in range(len(k_out)):
+        if k_out[j] == k_out[j]:
+            d0 = 1 / 3 * k_out[j] + 2 / 3 * d0
+            d_out.append(d0)
+        else:
+            d_out.append(float("nan"))
+    J = (3 * np.array(k_out)) - (2 * np.array(d_out))
+    return pd.Series(k_out, H.index), pd.Series(d_out, H.index), pd.Series(J, H.index)
+
+
 def compute_kdj(df: pd.DataFrame, n: int = 9) -> pd.DataFrame:
     if df.empty:
         return df.assign(K=np.nan, D=np.nan, J=np.nan)
-    kdj = ta.kdj(df["high"], df["low"], df["close"], n=n)
-    return df.assign(K=kdj[f"K_{n}_3"], D=kdj[f"D_{n}_3"], J=kdj[f"J_{n}_3"])
+    k, d, j = KDJ(df["high"], df["low"], df["close"], n=n)
+    return pd.DataFrame({"K": k, "D": d, "J": j})
 
 
 def compute_bbi(df: pd.DataFrame) -> pd.Series:
-    ma3 = ta.sma(df["close"], length=3)
-    ma6 = ta.sma(df["close"], length=6)
-    ma12 = ta.sma(df["close"], length=12)
-    ma24 = ta.sma(df["close"], length=24)
+    ma3 = ta.SMA(df["close"], timeperiod=3)
+    ma6 = ta.SMA(df["close"], timeperiod=6)
+    ma12 = ta.SMA(df["close"], timeperiod=12)
+    ma24 = ta.SMA(df["close"], timeperiod=24)
     return (ma3 + ma6 + ma12 + ma24) / 4
 
 
 def compute_mfi(df: pd.DataFrame, n: int = 14) -> pd.Series:
-    # FIXME: 使用自定义实现，因为 ta.mfi 的实现有误
-    # return ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=n)
-    tp = ta.hlc3(df["high"], df["low"], df["close"])
-    mf = tp * df["volume"]
-    pos_mf = mf.where(tp.diff(1) > 0, 0).rolling(window=n, min_periods=1).sum()
-    neg_mf = mf.where(tp.diff(1) < 0, 0).rolling(window=n, min_periods=1).sum()
-    mr = pos_mf / neg_mf + 1e-9
-    mfi = 100 - (100 / (1.0 + mr))
+    mfi = ta.MFI(df["high"], df["low"], df["close"], df["volume"], timeperiod=n)
     return mfi
 
 
