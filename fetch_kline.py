@@ -122,11 +122,15 @@ def main() -> None:
     xtdata.download_history_data2(
         codes, "1d", start_time=args.start, callback=partial(callback, prefix="日线")
     )
+    logger.info("开始下载5分钟线数据")
+    xtdata.download_history_data2(
+        codes, "5m", start_time=args.start, callback=partial(callback, prefix="5分钟线")
+    )
     # 下载财务数据
     logger.info("开始下载财务数据")
     xtdata.download_financial_data2(
         codes,
-        table_list=["PershareIndex"],
+        table_list=[],
         start_time=args.start,
         callback=partial(callback, prefix="财务"),
     )
