@@ -54,11 +54,6 @@ def compute_bbi(df: pd.DataFrame) -> pd.Series:
     return (ma3 + ma6 + ma12 + ma24) / 4
 
 
-def compute_mfi(df: pd.DataFrame, n: int = 14) -> pd.Series:
-    mfi = ta.MFI(df["high"], df["low"], df["close"], df["volume"], timeperiod=n)
-    return mfi
-
-
 def compute_rsv(
     df: pd.DataFrame,
     n: int,
@@ -906,7 +901,7 @@ class BigBullishVolumeSelector(Selector):
         self.require_bullish_close = bool(require_bullish_close)
         self.ignore_zero_volume = bool(ignore_zero_volume)
         self.close_lt_zxdq_mult = float(close_lt_zxdq_mult)
-        self.eps = float(1e-12)
+        self.eps = 1e-12
         self.min_history = (
             int(min_history) if min_history is not None else (self.vol_lookback_n + 2)
         )
@@ -1041,7 +1036,9 @@ class MFIOverSoldSelector(Selector):
         hist = hist.copy().sort_values("date")
         if not passes_day_constraints_today(hist):
             return False
-        mfi = compute_mfi(hist, n=self.lookback_n)
+        mfi = ta.MFI(
+            hist["high"], hist["low"], hist["close"], hist["volume"], timeperiod=self.lookback_n
+        )
         latest_mfi = mfi.iloc[-1]
         if latest_mfi < self.min_threshold:
             return False
