@@ -91,11 +91,17 @@ def instantiate_selector(cfg: dict[str, Any]) -> tuple[str, Selector]:
     if not cls_name:
         raise ValueError("缺少 class 字段")
 
+    # 先尝试从 Selector 模块加载
     try:
         module = importlib.import_module("Selector")
         cls = getattr(module, cls_name)
-    except (ModuleNotFoundError, AttributeError) as e:
-        raise ImportError(f"无法加载 Selector.{cls_name}: {e}") from e
+    except (ModuleNotFoundError, AttributeError):
+        # 如果 Selector 模块中没有，尝试从 ExtSelector 模块加载
+        try:
+            module = importlib.import_module("ExtSelector")
+            cls = getattr(module, cls_name)
+        except (ModuleNotFoundError, AttributeError) as e:
+            raise ImportError(f"无法加载 Selector.{cls_name} 或 ExtSelector.{cls_name}: {e}") from e
 
     params = cfg.get("params", {})
     return cfg.get("alias", cls_name), cls(**params)

@@ -1,3 +1,4 @@
+import logging
 from abc import abstractmethod
 from typing import Any, Protocol
 
@@ -5,6 +6,8 @@ import numpy as np
 import pandas as pd
 import talib as ta
 from scipy.signal import find_peaks
+
+logger = logging.getLogger("select")
 
 # --------------------------- 通用指标 --------------------------- #
 
