@@ -1,25 +1,25 @@
-# backend/j_industry_service.py
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Dict, List, Optional, Union
 import re
-import pandas as pd
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
-from Selector import compute_kdj
+import pandas as pd
+
 from select_stock import load_data
+from Selector import compute_kdj
 
 
-def _list_codes_from_data_dir(data_dir: Union[str, Path]) -> List[str]:
+def _list_codes_from_data_dir(data_dir: str | Path) -> list[str]:
     """扫描 data_dir 下的行情文件，提取 6 位代码"""
     data_dir = Path(data_dir)
     patterns = ["*.csv", "*.feather", "*.parquet", "*.pkl"]
-    files = []
+    files: list[Path] = []
     for pat in patterns:
         files.extend(data_dir.rglob(pat))
 
-    codes: List[str] = []
+    codes: list[str] = []
     for f in files:
         m = re.search(r"(\d{6})", f.stem)
         if m:
@@ -28,8 +28,8 @@ def _list_codes_from_data_dir(data_dir: Union[str, Path]) -> List[str]:
 
 
 def _load_industry_from_stocklist(
-    stocklist_path: Union[str, Path],
-    codes: List[str],
+    stocklist_path: str | Path,
+    codes: list[str],
 ) -> pd.DataFrame:
     """从本地 stocklist.csv 读取行业，返回 ['代码','行业']"""
     stocklist_path = Path(stocklist_path)
@@ -72,12 +72,12 @@ def _load_industry_from_stocklist(
 
 def compute_j_industry_distribution(
     *,
-    data_dir: Union[str, Path],
-    stocklist_path: Union[str, Path] = "stocklist.csv",
+    data_dir: str | Path,
+    stocklist_path: str | Path = "stocklist.csv",
     j_threshold: float = 15.0,
-    export_excel_path: Optional[Union[str, Path]] = None,
-    trade_date: Optional[Union[str, datetime]] = None,   # ← 新增
-) -> Dict:
+    export_excel_path: str | Path | None = None,
+    trade_date: str | datetime | None = None,  # ← 新增
+) -> dict[str, Any]:
     """
     计算“指定交易日(或其之前最近一日)的日线J值 < 阈值”的行业分布，返回汇总JSON（无明细）。
 
@@ -87,7 +87,7 @@ def compute_j_industry_distribution(
         指定交易日 (YYYYMMDD / YYYY-MM-DD)。为 None 时使用各股票数据中的最近一行。
     """
     # 0) 解析 trade_date（可空）
-    trade_dt: Optional[pd.Timestamp] = None
+    trade_dt: pd.Timestamp | None = None
     if trade_date:
         if isinstance(trade_date, datetime):
             trade_dt = pd.Timestamp(trade_date.date())
@@ -105,16 +105,20 @@ def compute_j_industry_distribution(
     codes = _list_codes_from_data_dir(data_dir)
     if not codes:
         return {
-            "meta": {"total_codes": 0, "selected_count": 0, "j_threshold": j_threshold,
-                     "trade_date": str(trade_dt.date()) if trade_dt is not None else None},
+            "meta": {
+                "total_codes": 0,
+                "selected_count": 0,
+                "j_threshold": j_threshold,
+                "trade_date": str(trade_dt.date()) if trade_dt is not None else None,
+            },
             "industry_counts": [],
         }
 
     # 2) 读历史数据
-    frames = load_data(Path(data_dir), codes)
+    frames = load_data(codes)
 
     # 3) 计算 指定日（或之前最近一日） 的 J 值
-    j_map: Dict[str, float] = {}
+    j_map: dict[str, float] = {}
     for code, df_code in frames.items():
         if df_code is None or df_code.empty:
             j_map[code] = float("nan")
@@ -168,7 +172,8 @@ def compute_j_industry_distribution(
         },
         "industry_counts": industry_counts.to_dict(orient="records"),
     }
-    
+
+
 if __name__ == "__main__":
     import argparse
     import json
@@ -177,7 +182,9 @@ if __name__ == "__main__":
     parser.add_argument("--data_dir", type=str, default="./data", help="历史数据目录")
     parser.add_argument("--stocklist", type=str, default="stocklist.csv", help="stocklist.csv 路径")
     parser.add_argument("--j_threshold", type=float, default=15.0, help="J(日) 阈值")
-    parser.add_argument("--trade_date", type=str, default=None, help="交易日 (YYYYMMDD / YYYY-MM-DD，可选)")
+    parser.add_argument(
+        "--trade_date", type=str, default=None, help="交易日 (YYYYMMDD / YYYY-MM-DD，可选)"
+    )
     args = parser.parse_args()
 
     result = compute_j_industry_distribution(

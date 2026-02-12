@@ -1,4 +1,5 @@
-pandas==2.3.0
-tqdm==4.66.4
-tushare==1.4.21
-scipy==1.14.1
+IPython~=9.8.0
+pandas~=2.3.0
+scipy~=1.16.3
+TA-Lib~=0.6.8
+xtquant~=250516.1.1

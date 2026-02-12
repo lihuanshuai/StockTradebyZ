@@ -5,10 +5,15 @@ import importlib
 import json
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any
 
 import pandas as pd
+from xtquant import xtdata
+
+from fetch_kline import filter_by_boards_stocklist, load_stocklist
+from Selector import Selector
 
 # ---------- 日志 ----------
 logging.basicConfig(
@@ -25,19 +30,40 @@ logger = logging.getLogger("select")
 
 # ---------- 工具 ----------
 
-def load_data(data_dir: Path, codes: Iterable[str]) -> Dict[str, pd.DataFrame]:
-    frames: Dict[str, pd.DataFrame] = {}
+
+def load_data(codes: list[str]) -> dict[str, pd.DataFrame]:
+    fields = ["open", "high", "low", "close", "volume"]
+    data: dict[str, pd.DataFrame] = xtdata.get_market_data(
+        field_list=fields,
+        stock_list=codes,
+        period="1d",
+        dividend_type="front",
+    )
+    result = {}
     for code in codes:
-        fp = data_dir / f"{code}.csv"
-        if not fp.exists():
-            logger.warning("%s 不存在，跳过", fp.name)
-            continue
-        df = pd.read_csv(fp, parse_dates=["date"]).sort_values("date")
-        frames[code] = df
-    return frames
+        df_open = data["open"].T[code]
+        df_high = data["high"].T[code]
+        df_low = data["low"].T[code]
+        df_close = data["close"].T[code]
+        df_volume = data["volume"].T[code]
+        df = pd.DataFrame(
+            {
+                "open": df_open,
+                "high": df_high,
+                "low": df_low,
+                "close": df_close,
+                "volume": df_volume,
+            }
+        )
+        df.index.name = "date"
+        df.reset_index(inplace=True)
+        df["date"] = pd.to_datetime(df["date"])
+        df.dropna(inplace=True)
+        result[code] = df
+    return result
 
 
-def load_config(cfg_path: Path) -> List[Dict[str, Any]]:
+def load_config(cfg_path: Path) -> list[dict[str, Any]]:
     if not cfg_path.exists():
         logger.error("配置文件 %s 不存在", cfg_path)
         sys.exit(1)
@@ -59,9 +85,9 @@ def load_config(cfg_path: Path) -> List[Dict[str, Any]]:
     return cfgs
 
 
-def instantiate_selector(cfg: Dict[str, Any]):
+def instantiate_selector(cfg: dict[str, Any]) -> tuple[str, Selector]:
     """动态加载 Selector 类并实例化"""
-    cls_name: str = cfg.get("class")
+    cls_name: str = cfg.get("class", "")
     if not cls_name:
         raise ValueError("缺少 class 字段")
 
@@ -77,39 +103,38 @@ def instantiate_selector(cfg: Dict[str, Any]):
 
 # ---------- 主函数 ----------
 
-def main():
-    p = argparse.ArgumentParser(description="Run selectors defined in configs.json")
-    p.add_argument("--data-dir", default="./data", help="CSV 行情目录")
-    p.add_argument("--config", default="./configs.json", help="Selector 配置文件")
-    p.add_argument("--date", help="交易日 YYYY-MM-DD；缺省=数据最新日期")
-    p.add_argument("--tickers", default="all", help="'all' 或逗号分隔股票代码列表")
-    args = p.parse_args()
 
-    # --- 加载行情 ---
-    data_dir = Path(args.data_dir)
-    if not data_dir.exists():
-        logger.error("数据目录 %s 不存在", data_dir)
-        sys.exit(1)
-
-    codes = (
-        [f.stem for f in data_dir.glob("*.csv")]
-        if args.tickers.lower() == "all"
-        else [c.strip() for c in args.tickers.split(",") if c.strip()]
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run selectors defined in configs.json")
+    parser.add_argument(
+        "--stocklist",
+        default="./stocklist.csv,./position.csv",
+        help="股票池文件,可以指定多个文件，用逗号分隔",
     )
-    if not codes:
-        logger.error("股票池为空！")
-        sys.exit(1)
+    parser.add_argument(
+        "--exclude-boards",
+        nargs="*",
+        default=["gem", "star", "bj"],
+        choices=["gem", "star", "bj"],
+        help="排除板块，可多选：gem(创业板300/301) star(科创板688) bj(北交所.BJ/4/8)",
+    )
+    parser.add_argument("--config", default="./configs.json", help="Selector 配置文件")
+    parser.add_argument("--date", help="交易日 YYYY-MM-DD；缺省今天日期")
+    parser.add_argument("--tickers", default="all", help="'all' 或逗号分隔股票代码列表")
+    args = parser.parse_args()
 
-    data = load_data(data_dir, codes)
-    if not data:
-        logger.error("未能加载任何行情数据")
-        sys.exit(1)
-
-    trade_date = (
+    # --- 加载行情 --- #
+    exclude_boards = set(args.exclude_boards or [])
+    stocklist_paths = [Path(path) for path in args.stocklist.split(",")]
+    stocklist_df = load_stocklist(stocklist_paths)
+    stocklist_df = filter_by_boards_stocklist(stocklist_df, exclude_boards)
+    codes = stocklist_df["ts_code"].tolist()
+    trade_date: datetime = (
         pd.to_datetime(args.date)
         if args.date
-        else max(df["date"].max() for df in data.values())
+        else datetime.combine(datetime.now(), datetime.min.time())
     )
+    data = load_data(codes)
     if not args.date:
         logger.info("未指定 --date，使用最近日期 %s", trade_date.date())
 
@@ -134,6 +159,9 @@ def main():
         logger.info("交易日: %s", trade_date.date())
         logger.info("符合条件股票数: %d", len(picks))
         logger.info("%s", ", ".join(picks) if picks else "无符合条件股票")
+        for pick in picks:
+            target_df = stocklist_df[stocklist_df["ts_code"] == pick]
+            logger.info("%s", target_df.to_string(index=False, header=False))
 
 
 if __name__ == "__main__":
